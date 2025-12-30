@@ -1,7 +1,7 @@
 import shutil
 import warnings
 from sklearn import metrics
-from sklearn.metrics import confusion_matrix, plot_confusion_matrix
+from sklearn.metrics import confusion_matrix
 warnings.filterwarnings("ignore")
 import torch.utils.data as data
 import os
@@ -52,6 +52,19 @@ def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     best_acc = 0
     print('Training time: ' + now.strftime("%m-%d %H:%M"))
+    
+    # Log the command used to run this script
+    import sys
+    command_used = ' '.join(sys.argv)
+    print(f'Command: {command_used}\n')
+    
+    # Write command to log file
+    txt_name = './log/' + time_str + 'log.txt'
+    with open(txt_name, 'a') as f:
+        f.write('='*80 + '\n')
+        f.write(f'Training Started: {now.strftime("%Y-%m-%d %H:%M:%S")}\n')
+        f.write(f'Command: {command_used}\n')
+        f.write('='*80 + '\n\n')
 
     # create model
     model = pyramid_trans_expr2(img_size=224, num_classes=8)
@@ -143,10 +156,25 @@ def main():
             print("=> loaded checkpoint '{}' (epoch {})".format(args.evaluate, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.evaluate))
+        
+        # Log evaluation command
+        import sys
+        command_used = ' '.join(sys.argv)
+        txt_name = './log/' + time_str + 'log.txt'
+        with open(txt_name, 'a') as f:
+            f.write('='*80 + '\n')
+            f.write(f'Evaluation Started: {now.strftime("%Y-%m-%d %H:%M:%S")}\n')
+            f.write(f'Command: {command_used}\n')
+            f.write(f'Checkpoint: {args.evaluate}\n')
+            f.write('='*80 + '\n\n')
+        
         validate(val_loader, model, criterion, args)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
+        # Start epoch timer
+        import time as time_module
+        epoch_start_time = time_module.time()
 
         current_learning_rate = optimizer.state_dict()['param_groups'][0]['lr']
         print('Current learning rate: ', current_learning_rate)
@@ -172,9 +200,17 @@ def main():
         best_acc = max(val_acc, best_acc)
 
         print('Current best accuracy: ', best_acc.item())
+        
+        # Calculate and log epoch time
+        epoch_time = time_module.time() - epoch_start_time
+        epoch_minutes = int(epoch_time // 60)
+        epoch_seconds = int(epoch_time % 60)
+        print(f'Epoch [{epoch + 1}/{args.epochs}] completed in {epoch_minutes:02d}:{epoch_seconds:02d} ({epoch_time:.2f}s)')
+        
         txt_name = './log/' + time_str + 'log.txt'
         with open(txt_name, 'a') as f:
             f.write('Current best accuracy: ' + str(best_acc.item()) + '\n')
+            f.write(f'Epoch [{epoch + 1}/{args.epochs}] completed in {epoch_minutes:02d}:{epoch_seconds:02d} ({epoch_time:.2f}s)\n')
 
         save_checkpoint({'epoch': epoch + 1,
                          'state_dict': model.state_dict(),

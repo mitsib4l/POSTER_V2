@@ -1,7 +1,7 @@
 import shutil
 import warnings
 from sklearn import metrics
-from sklearn.metrics import confusion_matrix, plot_confusion_matrix
+from sklearn.metrics import confusion_matrix
 warnings.filterwarnings("ignore")
 import torch.utils.data as data
 import os
@@ -53,8 +53,34 @@ def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     best_acc = 0
     print('Training time: ' + now.strftime("%m-%d %H:%M"))
+    
+    # Start timing
+    import time
+    start_time = time.time()
+    
+    # Check and print device information
+    if torch.cuda.is_available():
+        print(f'Using device: GPU (CUDA)')
+        print(f'GPU Name: {torch.cuda.get_device_name(0)}')
+        print(f'Number of GPUs: {torch.cuda.device_count()}')
+    else:
+        print('Using device: CPU (No CUDA available)')
+        print('WARNING: Training on CPU will be extremely slow!')
+    
+    # Log the command used to run this script
+    import sys
+    command_used = ' '.join(sys.argv)
+    print(f'Command: {command_used}\n')
+    
+    # Write command to log file
+    txt_name = './log/' + time_str + 'log.txt'
+    with open(txt_name, 'a') as f:
+        f.write('='*80 + '\n')
+        f.write(f'Training Started: {now.strftime("%Y-%m-%d %H:%M:%S")}\n')
+        f.write(f'Command: {command_used}\n')
+        f.write('='*80 + '\n\n')
 
-    # create model
+    # create model with CBAM option
     model = pyramid_trans_expr2(img_size=224, num_classes=7)
 
     model = torch.nn.DataParallel(model).cuda()
@@ -157,12 +183,27 @@ def main():
             print("=> loaded checkpoint '{}' (epoch {})".format(args.evaluate, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.evaluate))
+        
+        # Log evaluation command
+        import sys
+        command_used = ' '.join(sys.argv)
+        txt_name = './log/' + time_str + 'log.txt'
+        with open(txt_name, 'a') as f:
+            f.write('='*80 + '\n')
+            f.write(f'Evaluation Started: {now.strftime("%Y-%m-%d %H:%M:%S")}\n')
+            f.write(f'Command: {command_used}\n')
+            f.write(f'Checkpoint: {args.evaluate}\n')
+            f.write('='*80 + '\n\n')
+        
         validate(val_loader, model, criterion, args)
         return
 
     matrix = None
 
     for epoch in range(args.start_epoch, args.epochs):
+        # Start epoch timer
+        import time as time_module
+        epoch_start_time = time_module.time()
 
         current_learning_rate = optimizer.state_dict()['param_groups'][0]['lr']
         print('Current learning rate: ', current_learning_rate)
@@ -194,10 +235,17 @@ def main():
             matrix = D
 
         print('Current best matrix: ', matrix)
+        
+        # Calculate and log epoch time
+        epoch_time = time_module.time() - epoch_start_time
+        epoch_minutes = int(epoch_time // 60)
+        epoch_seconds = int(epoch_time % 60)
+        print(f'Epoch [{epoch + 1}/{args.epochs}] completed in {epoch_minutes:02d}:{epoch_seconds:02d} ({epoch_time:.2f}s)')
 
         txt_name = './log/' + time_str + 'log.txt'
         with open(txt_name, 'a') as f:
             f.write('Current best accuracy: ' + str(best_acc.item()) + '\n')
+            f.write(f'Epoch [{epoch + 1}/{args.epochs}] completed in {epoch_minutes:02d}:{epoch_seconds:02d} ({epoch_time:.2f}s)\n')
 
         save_checkpoint({'epoch': epoch + 1,
                          'state_dict': model.state_dict(),
@@ -205,6 +253,27 @@ def main():
                          'optimizer': optimizer.state_dict(),
                          'recorder1': recorder1,
                          'recorder': recorder}, is_best, args)
+    
+    # Calculate and log total training time
+    total_time = time.time() - start_time
+    hours = int(total_time // 3600)
+    minutes = int((total_time % 3600) // 60)
+    seconds = int(total_time % 60)
+    
+    time_str_formatted = f'{hours:02d}:{minutes:02d}:{seconds:02d}'
+    print(f'\n{"="*50}')
+    print(f'Training completed!')
+    print(f'Total training time: {time_str_formatted} ({total_time:.2f} seconds)')
+    print(f'Final best accuracy: {best_acc.item():.4f}')
+    print(f'{"="*50}\n')
+    
+    txt_name = './log/' + time_str + 'log.txt'
+    with open(txt_name, 'a') as f:
+        f.write(f'\n{"="*50}\n')
+        f.write(f'Training completed!\n')
+        f.write(f'Total training time: {time_str_formatted} ({total_time:.2f} seconds)\n')
+        f.write(f'Final best accuracy: {best_acc.item():.4f}\n')
+        f.write(f'{"="*50}\n')
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):

@@ -1,0 +1,77 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# Python distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Pretrained models (large files)
+models/pretrain/ir50.pth
+models/pretrain/mobilefacenet_model_best.pth.tar
+
+# Training checkpoints (can be large)
+checkpoint/*.pth
+checkpoint/*.pth.tar
+!checkpoint/save_ckp_here
+
+# Logs
+log/*.txt
+log/*.png
+!log/save_log_here
+
+# PDF documents
+*.pdf
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Mac
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Datasets (usually too large for git)
+data/
+dataset/
+datasets/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
