@@ -1,7 +1,7 @@
 import shutil
 import warnings
 from sklearn import metrics
-from sklearn.metrics import confusion_matrix, plot_confusion_matrix
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 warnings.filterwarnings("ignore")
 import torch.utils.data as data
 import os
@@ -406,7 +406,6 @@ class RecorderMeter1(object):
         self.y_true = target
 
     def plot_confusion_matrix(self, cm, title='Confusion Matrix', cmap=plt.cm.binary):
-        plt.imshow(cm, interpolation='nearest', cmap=cmap)
         y_true = self.y_true
         y_pred = self.y_pred
 
@@ -438,10 +437,9 @@ class RecorderMeter1(object):
         plt.grid(True, which='minor', linestyle='-')
         plt.gcf().subplots_adjust(bottom=0.15)
 
-        plot_confusion_matrix(cm_normalized, title='Normalized confusion matrix')
-        # show confusion matrix
+        # Use ConfusionMatrixDisplay for plotting
+        ConfusionMatrixDisplay(confusion_matrix=cm_normalized, display_labels=labels).plot(cmap=cmap)
         plt.savefig('./log/confusion_matrix.png', format='png')
-        # fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
         print('Saved figure')
         plt.show()
 
