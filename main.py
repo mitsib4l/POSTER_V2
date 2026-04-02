@@ -350,20 +350,14 @@ def validate(val_loader, model, criterion, args):
          [0, 0, 0, 0, 0, 0, 0],
          [0, 0, 0, 0, 0, 0, 0],
          [0, 0, 0, 0, 0, 0, 0]]
+    first_batch_images = None
     with torch.no_grad():
         for i, (images, target) in enumerate(val_loader):
             images = images.cuda()
             target = target.cuda()
             output = model(images)
             if i == 0:
-                os.makedirs('./log/gradcam', exist_ok=True)
-                for idx in range(min(4, images.size(0))):
-                    # Unnormalize if needed (adjust if your normalization is different)
-                    pil_img = to_pil_image(images[idx].cpu() * 0.229 + 0.485)
-                    rgb_img = np.array(pil_img.resize((224,224))).astype(np.float32) / 255.0
-                    input_tensor = images[idx].unsqueeze(0)
-                    save_prefix = f'./log/gradcam/sample_{idx}'
-                    generate_and_save_gradcam(model, input_tensor, rgb_img, save_prefix, device='cuda' if images[idx].is_cuda else 'cpu')
+                first_batch_images = images.clone().detach()
             loss = criterion(output, target)
 
             # measure accuracy and record loss
@@ -396,9 +390,19 @@ def validate(val_loader, model, criterion, args):
             if i % args.print_freq == 0:
                 progress.display(i)
 
-        print(' **** Accuracy {top1.avg:.3f} *** '.format(top1=top1))
-        with open('./log/' + time_str + 'log.txt', 'a') as f:
-            f.write(' * Accuracy {top1.avg:.3f}'.format(top1=top1) + '\n')
+    # Grad-CAM generation (requires gradients, so outside torch.no_grad())
+    if first_batch_images is not None:
+        os.makedirs('./log/gradcam', exist_ok=True)
+        for idx in range(min(4, first_batch_images.size(0))):
+            pil_img = to_pil_image(first_batch_images[idx].cpu() * 0.229 + 0.485)
+            rgb_img = np.array(pil_img.resize((224,224))).astype(np.float32) / 255.0
+            input_tensor = first_batch_images[idx].unsqueeze(0)
+            save_prefix = f'./log/gradcam/sample_{idx}'
+            generate_and_save_gradcam(model, input_tensor, rgb_img, save_prefix, device='cuda' if first_batch_images[idx].is_cuda else 'cpu')
+
+    print(' **** Accuracy {top1.avg:.3f} *** '.format(top1=top1))
+    with open('./log/' + time_str + 'log.txt', 'a') as f:
+        f.write(' * Accuracy {top1.avg:.3f}'.format(top1=top1) + '\n')
     print(D)
     return top1.avg, losses.avg, output, target, D
 
