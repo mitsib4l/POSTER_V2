@@ -410,12 +410,25 @@ def validate(val_loader, model, criterion, args):
     # Grad-CAM generation (requires gradients, so outside torch.no_grad())
     if first_batch_images is not None:
         os.makedirs('./log/gradcam', exist_ok=True)
+        # Get the actual labels from the first batch
+        first_batch_targets = None
+        for i, (images, target) in enumerate(val_loader):
+            first_batch_targets = target.cpu().numpy() if i == 0 else first_batch_targets
+            break
         for idx in range(min(4, first_batch_images.size(0))):
             pil_img = to_pil_image(first_batch_images[idx].cpu() * 0.229 + 0.485)
             rgb_img = np.array(pil_img.resize((224,224))).astype(np.float32) / 255.0
             input_tensor = first_batch_images[idx].unsqueeze(0)
             save_prefix = f'./log/gradcam/sample_{idx}'
             generate_and_save_gradcam(model, input_tensor, rgb_img, save_prefix, device='cuda' if first_batch_images[idx].is_cuda else 'cpu')
+            # Get prediction
+            model.eval()
+            with torch.no_grad():
+                out = model(input_tensor)
+                logits = out if not isinstance(out, (tuple, list)) else out[0]
+                pred_class = int(logits.argmax(dim=1).item())
+            # Print info
+            print(f"Image {idx}: Predicted={pred_class}, Actual={first_batch_targets[idx] if first_batch_targets is not None else 'N/A'}, Heatmap files: {save_prefix}_ir_back.png, {save_prefix}_conv3.png")
 
     print(' **** Accuracy {top1.avg:.3f} *** '.format(top1=top1))
     with open('./log/' + time_str + 'log.txt', 'a') as f:
