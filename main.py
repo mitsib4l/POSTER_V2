@@ -21,6 +21,10 @@ import datetime
 from torchsampler import ImbalancedDatasetSampler
 from models.PosterV2_7cls import *
 
+import os
+from torchvision.transforms.functional import to_pil_image
+from models.gradcam import generate_and_save_gradcam
+
 warnings.filterwarnings("ignore", category=UserWarning)
 
 now = datetime.datetime.now()
@@ -352,6 +356,15 @@ def validate(val_loader, model, criterion, args):
             images = images.cuda()
             target = target.cuda()
             output = model(images)
+            if i == 0:
+                os.makedirs('./log/gradcam', exist_ok=True)
+                for idx in range(min(4, images.size(0))):
+                    # Unnormalize if needed (adjust if your normalization is different)
+                    pil_img = to_pil_image(images[idx].cpu() * 0.229 + 0.485)
+                    rgb_img = np.array(pil_img.resize((224,224))).astype(np.float32) / 255.0
+                    input_tensor = images[idx].unsqueeze(0)
+                    save_prefix = f'./log/gradcam/sample_{idx}'
+                    generate_and_save_gradcam(model, input_tensor, rgb_img, save_prefix, device='cuda' if images[idx].is_cuda else 'cpu')
             loss = criterion(output, target)
 
             # measure accuracy and record loss
