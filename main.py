@@ -181,9 +181,8 @@ def main():
     if args.evaluate is not None:
         if os.path.isfile(args.evaluate):
             print("=> loading checkpoint '{}'".format(args.evaluate))
-            checkpoint = torch.load(args.evaluate)
+            checkpoint = torch.load(args.evaluate, weights_only=False)
             best_acc = checkpoint['best_acc']
-            best_acc = best_acc.to()
             print(f'best_acc:{best_acc}')
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})".format(args.evaluate, checkpoint['epoch']))
