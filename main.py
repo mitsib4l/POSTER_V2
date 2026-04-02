@@ -115,6 +115,23 @@ def main():
                 recorder = checkpoint['recorder']
             if 'recorder1' in checkpoint:
                 recorder1 = checkpoint['recorder1']
+            # Expand recorder arrays if needed
+            if args.epochs > recorder.total_epoch:
+                old_losses = recorder.epoch_losses
+                old_acc = recorder.epoch_accuracy
+                recorder.epoch_losses = np.zeros((args.epochs, 2), dtype=np.float32)
+                recorder.epoch_losses[:old_losses.shape[0]] = old_losses
+                recorder.epoch_accuracy = np.zeros((args.epochs, 2), dtype=np.float32)
+                recorder.epoch_accuracy[:old_acc.shape[0]] = old_acc
+                recorder.total_epoch = args.epochs
+
+                old_losses1 = recorder1.epoch_losses
+                old_acc1 = recorder1.epoch_accuracy
+                recorder1.epoch_losses = np.zeros((args.epochs, 2), dtype=np.float32)
+                recorder1.epoch_losses[:old_losses1.shape[0]] = old_losses1
+                recorder1.epoch_accuracy = np.zeros((args.epochs, 2), dtype=np.float32)
+                recorder1.epoch_accuracy[:old_acc1.shape[0]] = old_acc1
+                recorder1.total_epoch = args.epochs
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print(f"=> Resuming training from epoch {args.start_epoch}")
