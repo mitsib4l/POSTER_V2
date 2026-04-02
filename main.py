@@ -103,18 +103,20 @@ def main():
 
     if args.resume:
         if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
+            print(f"=> loading checkpoint '{args.resume}'")
             checkpoint = torch.load(args.resume, weights_only=False)
-            args.start_epoch = checkpoint['epoch']
-            best_acc = checkpoint['best_acc']
-            recorder = checkpoint['recorder']
-            recorder1 = checkpoint['recorder1']
-            best_acc = best_acc.to()
+            args.start_epoch = checkpoint.get('epoch', 0)
+            best_acc = checkpoint.get('best_acc', 0.0)
+            if 'recorder' in checkpoint:
+                recorder = checkpoint['recorder']
+            if 'recorder1' in checkpoint:
+                recorder1 = checkpoint['recorder1']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
-            print("=> loaded checkpoint '{}' (epoch {})".format(args.resume, checkpoint['epoch']))
-        else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+            print(f"=> Resuming training from epoch {args.start_epoch}")
+            print(f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint.get('epoch', 0)})")
+    else:
+        print(f"=> no checkpoint found at '{args.resume}'")
     cudnn.benchmark = True
 
     # Data loading code
