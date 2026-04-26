@@ -494,7 +494,8 @@ def validate(val_loader, model, criterion, args):
                         logits = logits if not isinstance(logits, (tuple, list)) else logits[0]
                         return F.softmax(logits, dim=1).cpu().numpy()
                 background = np.expand_dims(rgb_img, 0)
-                explainer = shap.Explainer(shap_batch_predict, background, algorithm="partition")
+                masker = shap.maskers.Image("inpaint_telea", rgb_img.shape)
+                explainer = shap.Explainer(shap_batch_predict, masker)
                 shap_values = explainer(np.expand_dims(rgb_img, 0))
                 shap_path = f'./log/shap/class_{int(label)}.png'
                 shap.image_plot(shap_values, np.expand_dims(rgb_img, 0), show=False)
