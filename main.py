@@ -20,10 +20,16 @@ import numpy as np
 import datetime
 from torchsampler import ImbalancedDatasetSampler
 from models.PosterV2_7cls import *
+import random
 
 import os
 from torchvision.transforms.functional import to_pil_image
 from models.gradcam import generate_and_save_gradcam
+
+from lime import lime_image
+import shap
+import torch.nn.functional as F
+from skimage.segmentation import slic
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -407,28 +413,95 @@ def validate(val_loader, model, criterion, args):
             if i % args.print_freq == 0:
                 progress.display(i)
 
-    # Grad-CAM generation (requires gradients, so outside torch.no_grad())
+
+    # Grad-CAM, LIME, and SHAP generation 
     if first_batch_images is not None:
         os.makedirs('./log/gradcam', exist_ok=True)
-        # Get the actual labels from the first batch
-        first_batch_targets = None
-        for i, (images, target) in enumerate(val_loader):
-            first_batch_targets = target.cpu().numpy() if i == 0 else first_batch_targets
-            break
-        for idx in range(min(4, first_batch_images.size(0))):
-            pil_img = to_pil_image(first_batch_images[idx].cpu() * 0.229 + 0.485)
+        os.makedirs('./log/lime', exist_ok=True)
+        os.makedirs('./log/shap', exist_ok=True)
+
+
+        class_to_indices = {i: [] for i in range(7)}
+        all_images = []
+        all_targets = []
+
+        # Gather all images and their labels
+        for images, targets in val_loader:
+            for img, label in zip(images, targets):
+                class_to_indices[int(label)].append((img, label))
+            # Stop early if all classes have at least one image
+            if all(len(v) > 0 for v in class_to_indices.values()):
+                break
+
+        # Randomly select one image per class
+        selected_samples = []
+        for cls in range(7):
+            img, label = random.choice(class_to_indices[cls])
+            selected_samples.append((img, label))
+
+        # --- Run explainability methods on these images ---
+        for idx, (img, label) in enumerate(selected_samples):
+            input_tensor = img.unsqueeze(0).cuda() if torch.cuda.is_available() else img.unsqueeze(0)
+            pil_img = to_pil_image(img.cpu() * 0.229 + 0.485)
             rgb_img = np.array(pil_img.resize((224,224))).astype(np.float32) / 255.0
-            input_tensor = first_batch_images[idx].unsqueeze(0)
-            save_prefix = f'./log/gradcam/sample_{idx}'
-            generate_and_save_gradcam(model, input_tensor, rgb_img, save_prefix, device='cuda' if first_batch_images[idx].is_cuda else 'cpu')
-            # Get prediction
-            model.eval()
+            save_prefix = f'./log/gradcam/class_{int(label)}'
+
+            # Grad-CAM
+            generate_and_save_gradcam(model, input_tensor, rgb_img, save_prefix, device='cuda' if input_tensor.is_cuda else 'cpu')
             with torch.no_grad():
                 out = model(input_tensor)
                 logits = out if not isinstance(out, (tuple, list)) else out[0]
                 pred_class = int(logits.argmax(dim=1).item())
-            # Print info
-            print(f"Image {idx}: Predicted={pred_class}, Actual={first_batch_targets[idx] if first_batch_targets is not None else 'N/A'}, Heatmap files: {save_prefix}_ir_back.png, {save_prefix}_conv3.png")
+            print(f"Class {int(label)}: Predicted={pred_class}, Actual={int(label)}, GradCAM: {save_prefix}_ir_back.png, {save_prefix}_conv3.png")
+
+            # LIME
+            if lime_image is not None:
+                explainer = lime_image.LimeImageExplainer()
+                def batch_predict(images_np):
+                    images_t = torch.tensor(images_np.transpose((0,3,1,2)), dtype=torch.float32)
+                    images_t = images_t.cuda() if input_tensor.is_cuda else images_t
+                    images_t = (images_t - 0.485) / 0.229
+                    with torch.no_grad():
+                        logits = model(images_t)
+                        logits = logits if not isinstance(logits, (tuple, list)) else logits[0]
+                        probs = F.softmax(logits, dim=1).cpu().numpy()
+                    return probs
+                segmentation_fn = lambda x: slic(x, n_segments=50, compactness=1, sigma=1)
+                explanation = explainer.explain_instance(
+                    (rgb_img*255).astype(np.uint8),
+                    batch_predict,
+                    top_labels=1,
+                    hide_color=0,
+                    num_samples=1000,
+                    segmentation_fn=segmentation_fn
+                )
+                lime_img, mask = explanation.get_image_and_mask(
+                    label=explanation.top_labels[0], positive_only=True, hide_rest=False, num_features=5
+                )
+                lime_path = f'./log/lime/class_{int(label)}.png'
+                from PIL import Image
+                Image.fromarray(lime_img).save(lime_path)
+                print(f"Class {int(label)}: Predicted={pred_class}, Actual={int(label)}, LIME: {lime_path}")
+
+            # SHAP
+            if shap is not None:
+                def shap_batch_predict(x):
+                    x = torch.tensor(x.transpose((0,3,1,2)), dtype=torch.float32)
+                    x = x.cuda() if input_tensor.is_cuda else x
+                    x = (x - 0.485) / 0.229
+                    with torch.no_grad():
+                        logits = model(x)
+                        logits = logits if not isinstance(logits, (tuple, list)) else logits[0]
+                        return F.softmax(logits, dim=1).cpu().numpy()
+                background = np.expand_dims(rgb_img, 0)
+                explainer = shap.Explainer(shap_batch_predict, background)
+                shap_values = explainer(np.expand_dims(rgb_img, 0))
+                shap_path = f'./log/shap/class_{int(label)}.png'
+                shap.image_plot(shap_values, np.expand_dims(rgb_img, 0), show=False)
+                import matplotlib.pyplot as plt
+                plt.savefig(shap_path)
+                plt.close()
+                print(f"Class {int(label)}: Predicted={pred_class}, Actual={int(label)}, SHAP: {shap_path}")
 
     print(' **** Accuracy {top1.avg:.3f} *** '.format(top1=top1))
     with open('./log/' + time_str + 'log.txt', 'a') as f:

@@ -38,6 +38,10 @@ thop>=0.1.1
 tensorboard>=2.15.0
 tensorboardX>=2.6.0
 tqdm>=4.66.0
+
+# Explainability
+lime>=0.2.0
+shap>=0.44.0
 visdom>=0.2.4
 
 # Configuration & Utils
