@@ -28,6 +28,9 @@ now = datetime.datetime.now()
 time_str = now.strftime("[%m-%d]-[%H-%M]-")
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--data_type', default='AffectNet-8',
+                    choices=['AffectNet-8', 'ferplus'],
+                    type=str, help='dataset option')
 parser.add_argument('--data', type=str, default=r'/home/Dataset/AffectNet8')
 parser.add_argument('--checkpoint_path', type=str, default='./checkpoint/' + time_str + 'model.pth')
 parser.add_argument('--best_checkpoint_path', type=str, default='./checkpoint/' + time_str + 'model_best.pth')
@@ -110,40 +113,56 @@ def main():
     valdir = os.path.join(args.data, 'test')
 
     if args.evaluate is None:
+        # ferplus  
+        if args.data_type.lower() == 'ferplus':
+            train_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.Grayscale(num_output_channels=3),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+                transforms.RandomErasing(p=1, scale=(0.05, 0.05))
+            ])
+            test_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.Grayscale(num_output_channels=3),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+            ])
+        else:
+            # AffectNet-8
+            train_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+                transforms.RandomErasing(p=1, scale=(0.05, 0.05))
+            ])
+            test_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+            ])
 
-        train_dataset = datasets.ImageFolder(traindir,
-                                             transforms.Compose([transforms.Resize((224, 224)),
-                                                                 transforms.RandomHorizontalFlip(),
-                                                                 transforms.ToTensor(),
-                                                                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                                      std=[0.229, 0.224, 0.225]),
-                                                                 transforms.RandomErasing(p=1, scale=(0.05, 0.05))]))
-
+        train_dataset = datasets.ImageFolder(traindir, train_transform)
+        
         train_loader = torch.utils.data.DataLoader(train_dataset,
-                                                   batch_size=args.batch_size,
-                                                   shuffle=True,
-                                                   num_workers=args.workers,
-                                                   pin_memory=True)
+                                                sampler=ImbalancedDatasetSampler(train_dataset),
+                                                batch_size=args.batch_size,
+                                                shuffle=False,
+                                                num_workers=args.workers,
+                                                pin_memory=True)
 
-        train_loader = torch.utils.data.DataLoader(train_dataset,
-                                                   sampler=ImbalancedDatasetSampler(train_dataset),
-                                                   batch_size=args.batch_size,
-                                                   shuffle=False,
-                                                   num_workers=args.workers,
-                                                   pin_memory=True)
-
-    test_dataset = datasets.ImageFolder(valdir,
-                                        transforms.Compose([transforms.Resize((224, 224)),
-                                                            transforms.ToTensor(),
-                                                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                                 std=[0.229, 0.224, 0.225]),
-                                                            ]))
-
+    test_dataset = datasets.ImageFolder(valdir, test_transform)
     val_loader = torch.utils.data.DataLoader(test_dataset,
-                                             batch_size=args.batch_size,
-                                             shuffle=False,
-                                             num_workers=args.workers,
-                                             pin_memory=True)
+                                            batch_size=args.batch_size,
+                                            shuffle=False,
+                                            num_workers=args.workers,
+                                            pin_memory=True)
 
     if args.evaluate is not None:
         if os.path.isfile(args.evaluate):

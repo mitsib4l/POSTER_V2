@@ -38,8 +38,9 @@ time_str = now.strftime("[%m-%d]-[%H-%M]-")
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data', type=str, default=r'/home/Dataset/RAF')
-parser.add_argument('--data_type', default='RAF-DB', choices=['RAF-DB', 'AffectNet-7', 'CAER-S'],
-                        type=str, help='dataset option')
+parser.add_argument('--data_type', default='RAF-DB',
+                    choices=['RAF-DB', 'AffectNet-7', 'CAER-S', 'fer2013'],
+                    type=str, help='dataset option')
 parser.add_argument('--checkpoint_path', type=str, default='./checkpoint/' + time_str + 'model.pth')
 parser.add_argument('--best_checkpoint_path', type=str, default='./checkpoint/' + time_str + 'model_best.pth')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N', help='number of data loading workers')
@@ -148,58 +149,79 @@ def main():
 
     # Data loading code
     traindir = os.path.join(args.data, 'train')
-
     valdir = os.path.join(args.data, 'valid')
 
-    if args.evaluate is None:
-
+    # choose transforms
+    if args.data_type in ('fer2013'):
+        train_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                std=[0.229, 0.224, 0.225]),
+            transforms.RandomErasing(scale=(0.02, 0.1))
+        ])
+        test_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                std=[0.229, 0.224, 0.225]),
+        ])
+    else:
         if args.data_type == 'RAF-DB':
-            train_dataset = datasets.ImageFolder(traindir,
-                                                 transforms.Compose([transforms.Resize((224, 224)),
-                                                                     transforms.RandomHorizontalFlip(),
-                                                                     transforms.ToTensor(),
-                                                                     transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                                          std=[0.229, 0.224, 0.225]),
-                                                                     transforms.RandomErasing(scale=(0.02, 0.1))]))
+            train_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+                transforms.RandomErasing(scale=(0.02, 0.1))
+            ])
         else:
-            train_dataset = datasets.ImageFolder(traindir,
-                                                 transforms.Compose([transforms.Resize((224, 224)),
-                                                                     transforms.RandomHorizontalFlip(),
-                                                                     transforms.ToTensor(),
-                                                                     transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                                          std=[0.229, 0.224, 0.225]),
-                                                                     transforms.RandomErasing(p=1, scale=(0.05, 0.05))]))
+            train_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                    std=[0.229, 0.224, 0.225]),
+                transforms.RandomErasing(p=1, scale=(0.05, 0.05))
+            ])
+        test_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                std=[0.229, 0.224, 0.225]),
+        ])
 
+    # create datasets
+    train_dataset = None
+    if os.path.isdir(traindir):
+        train_dataset = datasets.ImageFolder(traindir, train_transform)
+    test_dataset = datasets.ImageFolder(valdir, test_transform)
+
+    # create loaders (use ImbalancedDatasetSampler for AffectNet-7)
+    if train_dataset is not None:
         if args.data_type == 'AffectNet-7':
-
             train_loader = torch.utils.data.DataLoader(train_dataset,
-                                                       sampler=ImbalancedDatasetSampler(train_dataset),
-                                                       batch_size=args.batch_size,
-                                                       shuffle=False,
-                                                       num_workers=args.workers,
-                                                       pin_memory=True)
-
+                                                    sampler=ImbalancedDatasetSampler(train_dataset),
+                                                    batch_size=args.batch_size,
+                                                    shuffle=False,
+                                                    num_workers=args.workers,
+                                                    pin_memory=True)
         else:
-
             train_loader = torch.utils.data.DataLoader(train_dataset,
-                                                       batch_size=args.batch_size,
-                                                       shuffle=True,
-                                                       num_workers=args.workers,
-                                                       pin_memory=True)
-
-    test_dataset = datasets.ImageFolder(valdir,
-                                        transforms.Compose([transforms.Resize((224, 224)),
-                                                            transforms.ToTensor(),
-                                                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                                 std=[0.229, 0.224, 0.225]),
-                                                            ]))
-
+                                                    batch_size=args.batch_size,
+                                                    shuffle=True,
+                                                    num_workers=args.workers,
+                                                    pin_memory=True)
 
     val_loader = torch.utils.data.DataLoader(test_dataset,
-                                             batch_size=args.batch_size,
-                                             shuffle=False,
-                                             num_workers=args.workers,
-                                             pin_memory=True)
+                                            batch_size=args.batch_size,
+                                            shuffle=False,
+                                            num_workers=args.workers,
+                                            pin_memory=True)
 
     if args.evaluate is not None:
         if os.path.isfile(args.evaluate):
@@ -366,13 +388,10 @@ def validate(val_loader, model, criterion, args):
 
     # switch to evaluate mode
     model.eval()
-    D = [[0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0]]
+
+    num_classes = getattr(args, 'num_classes', 7)
+    D = np.zeros((num_classes, num_classes), dtype=int)
+
     first_batch_images = None
     with torch.no_grad():
         for i, (images, target) in enumerate(val_loader):
@@ -407,7 +426,7 @@ def validate(val_loader, model, criterion, args):
             y_pred = im_pre_label.flatten()
             im_pre_label.transpose()
 
-            C = metrics.confusion_matrix(y_ture, y_pred, labels=[0, 1, 2, 3, 4, 5, 6])
+            C = metrics.confusion_matrix(y_ture, y_pred, labels=list(range(num_classes)))
             D += C
 
             if i % args.print_freq == 0:
@@ -421,7 +440,8 @@ def validate(val_loader, model, criterion, args):
         os.makedirs('./log/shap', exist_ok=True)
 
 
-        class_to_indices = {i: [] for i in range(7)}
+        num_classes = getattr(args, 'num_classes', 7)
+        class_to_indices = {i: [] for i in range(num_classes)}
         all_images = []
         all_targets = []
 
@@ -435,7 +455,7 @@ def validate(val_loader, model, criterion, args):
 
         # Randomly select one image per class
         selected_samples = []
-        for cls in range(7):
+        for cls in range(num_classes):
             img, label = random.choice(class_to_indices[cls])
             selected_samples.append((img, label))
 
@@ -513,8 +533,8 @@ def validate(val_loader, model, criterion, args):
 def save_checkpoint(state, is_best, args):
     torch.save(state, args.checkpoint_path)
     if is_best:
-        best_state = state.pop('optimizer')
-        torch.save(best_state, args.best_checkpoint_path)
+        torch.save(state, args.best_checkpoint_path)
+
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
