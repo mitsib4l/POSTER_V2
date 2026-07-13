@@ -60,6 +60,27 @@ parser.add_argument('--gpu', type=str, default='0')
 args = parser.parse_args()
 
 
+def load_checkpoint_state_dict(model, checkpoint_state_dict):
+    model_state_dict = model.state_dict()
+
+    if all(key.startswith('module.') for key in checkpoint_state_dict.keys()):
+        checkpoint_state_dict = {
+            key[7:]: value for key, value in checkpoint_state_dict.items()
+        }
+
+    filtered_state_dict = {}
+    for key, value in checkpoint_state_dict.items():
+        if key in model_state_dict and model_state_dict[key].shape == value.shape:
+            filtered_state_dict[key] = value
+
+    load_result = model.load_state_dict(filtered_state_dict, strict=False)
+    if load_result.missing_keys:
+        print(f"=> missing keys ignored: {len(load_result.missing_keys)}")
+    if load_result.unexpected_keys:
+        print(f"=> unexpected keys ignored: {len(load_result.unexpected_keys)}")
+    return model
+
+
 def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     global device
@@ -143,7 +164,7 @@ def main():
                 recorder1.epoch_accuracy = np.zeros((args.epochs, 2), dtype=np.float32)
                 recorder1.epoch_accuracy[:old_acc1.shape[0]] = old_acc1
                 recorder1.total_epoch = args.epochs
-            model.load_state_dict(checkpoint['state_dict'])
+            model = load_checkpoint_state_dict(model, checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print(f"=> Resuming training from epoch {args.start_epoch}")
             print(f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint.get('epoch', 0)})")
@@ -233,7 +254,7 @@ def main():
             checkpoint = torch.load(args.evaluate, map_location=device, weights_only=False)
             best_acc = checkpoint['best_acc']
             print(f'best_acc:{best_acc}')
-            model.load_state_dict(checkpoint['state_dict'])
+            model = load_checkpoint_state_dict(model, checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})".format(args.evaluate, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.evaluate))
