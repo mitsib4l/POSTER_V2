@@ -119,7 +119,7 @@ def main():
     if args.resume:
         if os.path.isfile(args.resume):
             print(f"=> loading checkpoint '{args.resume}'")
-            checkpoint = torch.load(args.resume, weights_only=False)
+            checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
             args.start_epoch = checkpoint.get('epoch', 0)
             best_acc = checkpoint.get('best_acc', 0.0)
             if 'recorder' in checkpoint:
@@ -230,7 +230,7 @@ def main():
     if args.evaluate is not None:
         if os.path.isfile(args.evaluate):
             print("=> loading checkpoint '{}'".format(args.evaluate))
-            checkpoint = torch.load(args.evaluate, weights_only=False)
+            checkpoint = torch.load(args.evaluate, map_location=device, weights_only=False)
             best_acc = checkpoint['best_acc']
             print(f'best_acc:{best_acc}')
             model.load_state_dict(checkpoint['state_dict'])
