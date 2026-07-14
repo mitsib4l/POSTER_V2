@@ -83,8 +83,6 @@ def load_checkpoint_state_dict(model, checkpoint_state_dict):
 
 def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-    global device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     best_acc = 0
     print('Training time: ' + now.strftime("%m-%d %H:%M"))
     
@@ -117,9 +115,7 @@ def main():
     # create model with CBAM option
     model = pyramid_trans_expr2(img_size=224, num_classes=7)
 
-    model = model.to(device)
-    if device.type == "cuda" and torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
+    model = torch.nn.DataParallel(model).cuda()
 
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -363,8 +359,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
     for i, (images, target) in enumerate(train_loader):
         # print(images.shape)
-        images = images.to(device)
-        target = target.to(device)
+        images = images.cuda()
+        target = target.cuda()
 
         # compute output
         output = model(images)
@@ -380,8 +376,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         loss.backward()
         # optimizer.step()
         optimizer.first_step(zero_grad=True)
-        images = images.to(device)
-        target = target.to(device)
+        images = images.cuda()
+        target = target.cuda()
 
         # compute output
         output = model(images)
@@ -420,8 +416,8 @@ def validate(val_loader, model, criterion, args):
     first_batch_images = None
     with torch.no_grad():
         for i, (images, target) in enumerate(val_loader):
-            images = images.to(device)
-            target = target.to(device)
+            images = images.cuda()
+            target = target.cuda()
             output = model(images)
             if i == 0:
                 first_batch_images = images.clone().detach()
