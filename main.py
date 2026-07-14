@@ -1,12 +1,12 @@
 import shutil
 import warnings
-from sklearn import metrics
-from sklearn.metrics import confusion_matrix
+from scikit-learn import metrics
+from scikit-learn.metrics import confusion_matrix
 warnings.filterwarnings("ignore")
 import torch.utils.data as data
 import os
 import argparse
-from sklearn.metrics import f1_score, confusion_matrix
+from scikit-learn.metrics import f1_score, confusion_matrix
 from data_preprocessing.sam import SAM
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
