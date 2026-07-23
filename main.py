@@ -60,31 +60,8 @@ parser.add_argument('--gpu', type=str, default='0')
 args = parser.parse_args()
 
 
-def load_checkpoint_state_dict(model, checkpoint_state_dict):
-    model_state_dict = model.state_dict()
-
-    if all(key.startswith('module.') for key in checkpoint_state_dict.keys()):
-        checkpoint_state_dict = {
-            key[7:]: value for key, value in checkpoint_state_dict.items()
-        }
-
-    filtered_state_dict = {}
-    for key, value in checkpoint_state_dict.items():
-        if key in model_state_dict and model_state_dict[key].shape == value.shape:
-            filtered_state_dict[key] = value
-
-    load_result = model.load_state_dict(filtered_state_dict, strict=False)
-    if load_result.missing_keys:
-        print(f"=> missing keys ignored: {len(load_result.missing_keys)}")
-    if load_result.unexpected_keys:
-        print(f"=> unexpected keys ignored: {len(load_result.unexpected_keys)}")
-    return model
-
-
 def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-    global device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     best_acc = 0
     print('Training time: ' + now.strftime("%m-%d %H:%M"))
     
@@ -117,9 +94,7 @@ def main():
     # create model with CBAM option
     model = pyramid_trans_expr2(img_size=224, num_classes=7)
 
-    model = model.to(device)
-    if device.type == "cuda" and torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
+    model = torch.nn.DataParallel(model).cuda()
 
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -140,7 +115,7 @@ def main():
     if args.resume:
         if os.path.isfile(args.resume):
             print(f"=> loading checkpoint '{args.resume}'")
-            checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
+            checkpoint = torch.load(args.resume, weights_only=False)
             args.start_epoch = checkpoint.get('epoch', 0)
             best_acc = checkpoint.get('best_acc', 0.0)
             if 'recorder' in checkpoint:
@@ -164,7 +139,7 @@ def main():
                 recorder1.epoch_accuracy = np.zeros((args.epochs, 2), dtype=np.float32)
                 recorder1.epoch_accuracy[:old_acc1.shape[0]] = old_acc1
                 recorder1.total_epoch = args.epochs
-            model = load_checkpoint_state_dict(model, checkpoint['state_dict'])
+            model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print(f"=> Resuming training from epoch {args.start_epoch}")
             print(f"=> loaded checkpoint '{args.resume}' (epoch {checkpoint.get('epoch', 0)})")
@@ -251,10 +226,10 @@ def main():
     if args.evaluate is not None:
         if os.path.isfile(args.evaluate):
             print("=> loading checkpoint '{}'".format(args.evaluate))
-            checkpoint = torch.load(args.evaluate, map_location=device, weights_only=False)
+            checkpoint = torch.load(args.evaluate, weights_only=False)
             best_acc = checkpoint['best_acc']
             print(f'best_acc:{best_acc}')
-            model = load_checkpoint_state_dict(model, checkpoint['state_dict'])
+            model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})".format(args.evaluate, checkpoint['epoch']))
         else:
             print("=> no checkpoint found at '{}'".format(args.evaluate))
@@ -363,8 +338,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
     for i, (images, target) in enumerate(train_loader):
         # print(images.shape)
-        images = images.to(device)
-        target = target.to(device)
+        images = images.cuda()
+        target = target.cuda()
 
         # compute output
         output = model(images)
@@ -380,8 +355,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         loss.backward()
         # optimizer.step()
         optimizer.first_step(zero_grad=True)
-        images = images.to(device)
-        target = target.to(device)
+        images = images.cuda()
+        target = target.cuda()
 
         # compute output
         output = model(images)
@@ -420,8 +395,8 @@ def validate(val_loader, model, criterion, args):
     first_batch_images = None
     with torch.no_grad():
         for i, (images, target) in enumerate(val_loader):
-            images = images.to(device)
-            target = target.to(device)
+            images = images.cuda()
+            target = target.cuda()
             output = model(images)
             if i == 0:
                 first_batch_images = images.clone().detach()
