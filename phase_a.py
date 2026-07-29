@@ -612,8 +612,21 @@ def main():
     parser.add_argument("--no-epoch-checkpoints", action="store_true",
                         help="Disable saving the full per-epoch checkpoint pool under m6/ (used for the "
                              "training-trajectory analysis in Phase C'). Enabled by default.")
+    parser.add_argument("--init-checkpoint", type=str, default=None,
+                        help="Warm-start ALL stages (m0..m4) from this checkpoint's weights instead of the "
+                             "pretrained backbone, then run the full m0-m4 schedule from epoch 0 in each "
+                             "stage as usual. Use this (instead of --resume) when you want a complete, "
+                             "comparable m0-m4 trajectory built on top of an existing checkpoint rather than "
+                             "continuing one specific interrupted stage. Mutually exclusive with --resume.")
 
     args = parser.parse_args()
+
+    if args.init_checkpoint and args.resume:
+        raise ValueError(
+            "--init-checkpoint and --resume are mutually exclusive: use --init-checkpoint to warm-start the "
+            "full m0-m4 trajectory from an existing checkpoint, or --resume to continue one specific "
+            "interrupted stage mid-training."
+        )
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     set_seed(args.seed)
@@ -643,6 +656,10 @@ def main():
 
     model = build_model(num_classes=num_classes, device=device, use_dataparallel=True)
     criterion = nn.CrossEntropyLoss()
+
+    if args.init_checkpoint:
+        print(f"Warm-starting all stages (m0-m4) from checkpoint weights: {args.init_checkpoint}")
+        model = load_model_from_checkpoint(model, args.init_checkpoint, device)
 
     if args.evaluate is not None:
         model = load_model_from_checkpoint(model, args.evaluate, device)
@@ -767,6 +784,13 @@ def main():
 
             print(f"Continuing stage {stage_name} at epoch {start_epoch + 1}/{stage_epochs} "
                   f"(resumed best metric: {best_acc:.4f}).")
+            if start_epoch >= stage_epochs:
+                print(
+                    f"Warning: resume epoch ({start_epoch}) already >= --stage-epochs target for "
+                    f"stage {stage_name} ({stage_epochs}); 0 additional epochs will run. Pass a larger "
+                    f"--stage-epochs value for {stage_name} (checkpoint-epoch + desired new epochs) to "
+                    f"actually continue training."
+                )
 
         stage_history = []
         start_time = time.time()
