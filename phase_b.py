@@ -15,9 +15,6 @@ import torch.nn.functional as F
 import torchvision.datasets as datasets
 import matplotlib.pyplot as plt
 from PIL import Image
-import mediapipe as mp
-import mediapipe.solutions.face_mesh  # some pip builds don't auto-populate mp.solutions
-
 from phase_a import build_transforms, build_model, load_model_from_checkpoint, unwrap_model
 
 try:
@@ -32,10 +29,30 @@ except Exception:
     ClassifierOutputTarget = None
     show_cam_on_image = None
 
+try:
+    import face_alignment
+except Exception:
+    face_alignment = None
+
 
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-FACE_MESH = mp.solutions.face_mesh
+
+# Lazily-constructed 68-point (ibug) landmark detector, PyTorch-native (avoids the
+# TensorFlow/mediapipe dependency churn). Loaded on first actual use, not at import time.
+_FACE_ALIGNMENT_MODEL = None
+
+
+def _get_face_alignment_model():
+    global _FACE_ALIGNMENT_MODEL
+    if face_alignment is None:
+        return None
+    if _FACE_ALIGNMENT_MODEL is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _FACE_ALIGNMENT_MODEL = face_alignment.FaceAlignment(
+            face_alignment.LandmarksType.TWO_D, flip_input=False, device=device
+        )
+    return _FACE_ALIGNMENT_MODEL
 
 # Utility functions
 def set_seed(seed: int) -> None:
@@ -236,37 +253,28 @@ def predict_step(model, input_tensor: torch.Tensor) -> Tuple[np.ndarray, int, fl
     ent = entropy_from_probs(probs)
     return probs, pred, conf, ent
 
-# STEP 6 
-# Facial landmarks (χρησιμοποιήθηκε MediaPipe FaceMesh!!!)
+# STEP 6
+# Facial landmarks: standard 68-point ibug/dlib scheme (0-indexed), via face-alignment.
+# Replaced mediapipe FaceMesh (478 points) due to environment/dependency issues.
 LANDMARK_IDXS = {
-    "left_eyebrow": [70, 63, 105, 66, 107, 55, 65, 52, 53, 46],
-    "right_eyebrow": [300, 293, 334, 296, 336, 285, 295, 282, 283, 276],
-    "left_eye": [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246],
-    "right_eye": [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466],
-    "nose": [1, 2, 4, 5, 6, 19, 94, 97, 98, 168, 195, 197, 327, 326],
-    "mouth": [61, 185, 40, 39, 37, 0, 267, 269, 270, 291, 405, 321, 314, 17, 84, 181, 91, 146],
-    "jaw": [234, 93, 132, 58, 172, 136, 150, 149, 176, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323, 454],
+    "left_eyebrow": [17, 18, 19, 20, 21],
+    "right_eyebrow": [22, 23, 24, 25, 26],
+    "left_eye": [36, 37, 38, 39, 40, 41],
+    "right_eye": [42, 43, 44, 45, 46, 47],
+    "nose": [27, 28, 29, 30, 31, 32, 33, 34, 35],
+    "mouth": list(range(48, 68)),
+    "jaw": list(range(0, 17)),
 }
 
 
 def extract_facemesh_landmarks(rgb_img: np.ndarray) -> Optional[np.ndarray]:
-    h, w = rgb_img.shape[:2]
-    with FACE_MESH.FaceMesh(
-        static_image_mode=True,
-        refine_landmarks=True,
-        max_num_faces=1,
-        min_detection_confidence=0.5,
-    ) as face_mesh:
-        result = face_mesh.process((rgb_img * 255).astype(np.uint8))
-        if not result.multi_face_landmarks:
-            return None
-
-        pts = []
-        for lm in result.multi_face_landmarks[0].landmark:
-            x = np.clip(lm.x * w, 0, w - 1)
-            y = np.clip(lm.y * h, 0, h - 1)
-            pts.append([x, y])
-        return np.asarray(pts, dtype=np.float32)
+    model = _get_face_alignment_model()
+    if model is None:
+        return None
+    preds = model.get_landmarks((rgb_img * 255).astype(np.uint8))
+    if not preds:
+        return None
+    return np.asarray(preds[0], dtype=np.float32)
 
 
 def poly_mask(points: np.ndarray, shape) -> np.ndarray:
@@ -384,10 +392,10 @@ def build_au_region_masks(pts: np.ndarray, shape) -> Dict[str, np.ndarray]:
         shape=shape,
     )
 
-    left_eye_outer = pts[33]
-    right_eye_outer = pts[263]
-    left_mouth_corner = pts[61]
-    right_mouth_corner = pts[291] if pts.shape[0] > 291 else pts[270]
+    left_eye_outer = pts[36]
+    right_eye_outer = pts[45]
+    left_mouth_corner = pts[48]
+    right_mouth_corner = pts[54]
 
     left_cheek = box_mask(
         x1=min(left_eye_outer[0], left_mouth_corner[0]) - 0.08 * w,

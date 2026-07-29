@@ -20,7 +20,7 @@ scope and approximations, which should be reported alongside any results:
             PCA/t-SNE plots on the final pooled embedding, colored by class
             and by prediction correctness (no identity/dataset labels to
             color by, per the Step 10 limitation above).
-  Step 12 - AU concepts are approximated by four FaceMesh-landmark geometric
+  Step 12 - AU concepts are approximated by four 68-point-landmark geometric
             proxies (eye/mouth aspect ratio, brow raise, mouth-corner pull),
             not annotated Action Units. TCAV is a lightweight directional-
             derivative variant computed on pooled hidden states.
@@ -176,23 +176,28 @@ def remove_hooks(handles: List) -> None:
 # Shared sample cache (landmarks + AU-proxy concepts are stage-independent)
 # ---------------------------------------------------------------------------
 
+# Point indices follow the standard 68-point ibug/dlib scheme (matches phase_b.py's
+# LANDMARK_IDXS, produced by the face-alignment detector): 0-16 jaw, 17-21/22-26
+# eyebrows, 36-41/42-47 eyes, 48-67 mouth (outer 48-59, inner 60-67).
 def compute_au_proxy_concepts(pts: Optional[np.ndarray]) -> Optional[Dict[str, float]]:
-    if pts is None or pts.shape[0] < 468:
+    if pts is None or pts.shape[0] < 68:
         return None
 
     def dist(a: int, b: int) -> float:
         return float(np.linalg.norm(pts[a] - pts[b]))
 
-    face_scale = dist(234, 454) + 1e-6
-    left_ear = ((dist(159, 145) + dist(160, 144)) / 2.0) / (dist(33, 133) + 1e-6)
-    right_ear = ((dist(386, 374) + dist(387, 373)) / 2.0) / (dist(263, 362) + 1e-6)
+    face_scale = dist(0, 16) + 1e-6
+
+    # Standard eye-aspect-ratio (Soukupova & Cech): (|p2-p6| + |p3-p5|) / (2*|p1-p4|).
+    left_ear = (dist(37, 41) + dist(38, 40)) / (2.0 * dist(36, 39) + 1e-6)
+    right_ear = (dist(43, 47) + dist(44, 46)) / (2.0 * dist(42, 45) + 1e-6)
     eye_aspect_ratio = (left_ear + right_ear) / 2.0
 
-    mouth_h = dist(13, 14)
-    mouth_w = dist(61, 291) + 1e-6
+    mouth_h = dist(51, 57)
+    mouth_w = dist(48, 54) + 1e-6
     mouth_aspect_ratio = mouth_h / mouth_w
 
-    brow_raise = ((dist(105, 159) + dist(334, 386)) / 2.0) / face_scale
+    brow_raise = ((dist(19, 37) + dist(24, 43)) / 2.0) / face_scale
     mouth_corner_pull = mouth_w / face_scale
 
     return {
