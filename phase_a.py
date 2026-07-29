@@ -34,6 +34,15 @@ try:
 except Exception:
     ImbalancedDatasetSampler = None
 
+
+class RecorderMeter:
+    pass
+
+
+class RecorderMeter1:
+    pass
+
+
 # For more repeatable splits and training
 def set_seed(seed: int) -> None:
     random.seed(seed)
