@@ -3,6 +3,7 @@ import json
 import csv
 import math
 import time
+import shutil
 import random
 import argparse
 import datetime
@@ -72,6 +73,31 @@ def load_model_from_checkpoint(model: nn.Module, ckpt_path: str, device: torch.d
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
     state_dict = checkpoint.get("state_dict", checkpoint)
     return load_checkpoint_state_dict(model, state_dict)
+
+
+# Accepts both this script's own checkpoint format (epoch/stage/state_dict/optimizer/
+# scheduler/best_metric) and the original main.py format (epoch/state_dict/best_acc/
+# optimizer/recorder/recorder1, no stage field, no scheduler state).
+def load_resume_checkpoint(path: str, device: torch.device) -> Dict[str, object]:
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    state_dict = checkpoint.get("state_dict", checkpoint)
+
+    if "best_metric" in checkpoint:
+        best_metric = float(checkpoint["best_metric"])
+    elif "best_acc" in checkpoint:
+        best_acc_value = checkpoint["best_acc"]
+        best_metric = float(best_acc_value.item()) if hasattr(best_acc_value, "item") else float(best_acc_value)
+    else:
+        best_metric = -1.0
+
+    return {
+        "state_dict": state_dict,
+        "optimizer": checkpoint.get("optimizer"),
+        "scheduler": checkpoint.get("scheduler"),
+        "epoch": int(checkpoint.get("epoch", 0)),
+        "best_metric": best_metric,
+        "stage": checkpoint.get("stage"),
+    }
 
 
 def accuracy_from_logits(logits: torch.Tensor, target: torch.Tensor) -> float:
@@ -564,6 +590,20 @@ def main():
     parser.add_argument("--gpu", type=str, default="0")
     parser.add_argument("--num-classes", type=int, default=None)
 
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to a checkpoint to resume training from. Accepts either this "
+                             "script's own checkpoint format or the original main.py format.")
+    parser.add_argument("--resume-stage", type=str, default=None, choices=["m0", "m1", "m2", "m3", "m4"],
+                        help="Which stage --resume corresponds to / should resume into. Required unless "
+                             "the checkpoint already stores its own 'stage' field (use m4 for checkpoints "
+                             "from the original, unstaged main.py training run).")
+    parser.add_argument("--resume-epoch", type=int, default=None,
+                        help="Completed-epoch count to resume from within --resume-stage. Defaults to "
+                             "the epoch recorded inside the checkpoint.")
+    parser.add_argument("--no-epoch-checkpoints", action="store_true",
+                        help="Disable saving the full per-epoch checkpoint pool under m6/ (used for the "
+                             "training-trajectory analysis in Phase C'). Enabled by default.")
+
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -631,8 +671,45 @@ def main():
     previous_stage_last = None
     model_start_checkpoint = None
 
+    # Resume support: --resume-stage identifies which m0..m4 stage the checkpoint belongs
+    # to, so earlier stages can be skipped entirely and training continues mid-stage.
+    resume_info = load_resume_checkpoint(args.resume, device) if args.resume else None
+    resume_stage_name = None
+    if resume_info is not None:
+        resume_stage_name = args.resume_stage or resume_info["stage"]
+        if resume_stage_name is None:
+            raise ValueError(
+                "--resume checkpoint does not store its own stage; pass --resume-stage m0..m4 explicitly "
+                "(use m4 if the checkpoint came from the original, unstaged main.py training run)."
+            )
+        print(f"Resume requested: stage={resume_stage_name}, checkpoint={args.resume}")
+
+    # M5 (best checkpoint overall) and M6 (per-epoch checkpoint pool) per the PDF's
+    # trajectory definition: not additional freeze schedules, just extra bookkeeping
+    # around the same M0-M4 training runs.
+    overall_best = {"val_acc": -1.0, "stage": None, "epoch": None}
+    if resume_info is not None:
+        overall_best = {
+            "val_acc": resume_info["best_metric"],
+            "stage": resume_stage_name,
+            "epoch": resume_info["epoch"],
+        }
+        m5_checkpoints_dir = output_root / "m5" / "checkpoints"
+        ensure_dir(m5_checkpoints_dir)
+        shutil.copy2(args.resume, m5_checkpoints_dir / "best.pth")
+        shutil.copy2(args.resume, m5_checkpoints_dir / "last.pth")
+
+    epoch_checkpoint_index: List[Dict[str, object]] = []
+    reached_resume_point = resume_stage_name is None
+
     # TRAINING LOOP
     for stage_idx, ((stage_name, stage_label), stage_epochs) in enumerate(zip(stage_configs(), stage_epoch_counts)):
+        if not reached_resume_point:
+            if stage_name != resume_stage_name:
+                print(f"Skipping stage {stage_name} ({stage_label}): resuming directly at stage {resume_stage_name}.")
+                continue
+            reached_resume_point = True
+
         stage_dir = output_root / stage_name
         ensure_dir(stage_dir)
         ensure_dir(stage_dir / "checkpoints")
@@ -641,20 +718,51 @@ def main():
 
         print(f"\n=== Starting stage {stage_name} ({stage_label}) for {stage_epochs} epochs ===")
 
-        if previous_stage_last is not None:
+        is_resuming_this_stage = resume_info is not None and stage_name == resume_stage_name
+        if is_resuming_this_stage:
+            print(f"Resuming stage {stage_name} from checkpoint: {args.resume}")
+            model = load_checkpoint_state_dict(model, resume_info["state_dict"])
+        elif previous_stage_last is not None:
             model = load_model_from_checkpoint(model, str(previous_stage_last), device)
 
         apply_stage_freeze(model, stage_name)
         optimizer, scheduler = make_optimizer(model, args)
 
-        best_acc = -1.0
         best_ckpt_path = stage_dir / "checkpoints" / "best.pth"
         last_ckpt_path = stage_dir / "checkpoints" / "last.pth"
+
+        start_epoch = 0
+        best_acc = -1.0
+        if is_resuming_this_stage:
+            start_epoch = args.resume_epoch if args.resume_epoch is not None else resume_info["epoch"]
+            best_acc = resume_info["best_metric"]
+
+            if resume_info["optimizer"] is not None:
+                try:
+                    optimizer.load_state_dict(resume_info["optimizer"])
+                    print("Resumed optimizer state from checkpoint.")
+                except Exception as exc:
+                    print(f"Warning: could not resume optimizer state ({exc}); starting with a fresh optimizer.")
+
+            scheduler_resumed = False
+            if resume_info["scheduler"] is not None:
+                try:
+                    scheduler.load_state_dict(resume_info["scheduler"])
+                    scheduler_resumed = True
+                    print("Resumed scheduler state from checkpoint.")
+                except Exception as exc:
+                    print(f"Warning: could not resume scheduler state ({exc}); fast-forwarding instead.")
+            if not scheduler_resumed:
+                for _ in range(start_epoch):
+                    scheduler.step()
+
+            print(f"Continuing stage {stage_name} at epoch {start_epoch + 1}/{stage_epochs} "
+                  f"(resumed best metric: {best_acc:.4f}).")
 
         stage_history = []
         start_time = time.time()
 
-        for epoch in range(stage_epochs):
+        for epoch in range(start_epoch, stage_epochs):
             train_loss, train_acc = train_one_epoch(train_loader, model, criterion, optimizer, device, args, epoch)
 
             eval_result = evaluate(val_loader, model, criterion, device, num_classes, class_names)
@@ -689,6 +797,13 @@ def main():
                 stage_name=stage_name,
                 args=args,
             )
+
+            if not args.no_epoch_checkpoints:
+                m6_checkpoints_dir = output_root / "m6" / "checkpoints"
+                ensure_dir(m6_checkpoints_dir)
+                m6_path = m6_checkpoints_dir / f"{stage_name}_epoch{epoch + 1:03d}.pth"
+                shutil.copy2(last_ckpt_path, m6_path)
+                epoch_checkpoint_index.append({"stage": stage_name, "epoch": epoch + 1, "path": str(m6_path)})
 
             np.savez_compressed(
                 stage_dir / "metrics" / f"epoch_{epoch + 1:03d}_predictions.npz",
@@ -726,6 +841,15 @@ def main():
                     stage_name=stage_name,
                     args=args,
                 )
+
+            if current_val_acc > overall_best["val_acc"]:
+                overall_best["val_acc"] = current_val_acc
+                overall_best["stage"] = stage_name
+                overall_best["epoch"] = epoch + 1
+                m5_checkpoints_dir = output_root / "m5" / "checkpoints"
+                ensure_dir(m5_checkpoints_dir)
+                shutil.copy2(last_ckpt_path, m5_checkpoints_dir / "best.pth")
+                shutil.copy2(last_ckpt_path, m5_checkpoints_dir / "last.pth")
 
             print(
                 f"[{stage_name}] epoch {epoch + 1}/{stage_epochs} "
@@ -789,6 +913,25 @@ def main():
         previous_stage_last = last_ckpt_path
 
     write_json(output_root / "metrics" / "phase_a_summary.json", summary_rows)
+
+    if overall_best["stage"] is not None:
+        ensure_dir(output_root / "m5" / "metrics")
+        write_json(output_root / "m5" / "metrics" / "stage_final.json", {
+            "stage": "m5",
+            "stage_label": "best_checkpoint_overall",
+            "source_stage": overall_best["stage"],
+            "source_epoch": overall_best["epoch"],
+            "best_val_acc": round(overall_best["val_acc"], 4),
+        })
+        print(f"\nM5 (best checkpoint overall): stage={overall_best['stage']} "
+              f"epoch={overall_best['epoch']} val_acc={overall_best['val_acc']:.4f}")
+
+    if not args.no_epoch_checkpoints and epoch_checkpoint_index:
+        ensure_dir(output_root / "m6" / "metrics")
+        write_json(output_root / "m6" / "metrics" / "checkpoint_index.json", epoch_checkpoint_index)
+        print(f"M6 (per-epoch checkpoint pool): {len(epoch_checkpoint_index)} checkpoints saved under "
+              f"{output_root / 'm6' / 'checkpoints'}")
+
     print("\nPhase A complete.")
     print(f"Outputs written to: {output_root}")
 
