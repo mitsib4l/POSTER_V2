@@ -16,6 +16,7 @@ import torchvision.datasets as datasets
 import matplotlib.pyplot as plt
 from PIL import Image
 import mediapipe as mp
+import mediapipe.solutions.face_mesh  # some pip builds don't auto-populate mp.solutions
 
 from phase_a import build_transforms, build_model, load_model_from_checkpoint, unwrap_model
 
